@@ -1,0 +1,104 @@
+!pip install QuantLib-Python
+!pip install matplotlib
+
+import QuantLib as ql
+import math
+import datetime
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Set up the market data
+risk_free_rate = 0.02
+libor_rate = 0.03
+calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+today = ql.Date(7, 5, 2023)
+ql.Settings.instance().evaluationDate = today
+
+# Set up the yield curve
+risk_free_curve = ql.FlatForward(today, ql.QuoteHandle(ql.SimpleQuote(risk_free_rate)), ql.Actual365Fixed())
+libor_curve = ql.FlatForward(today, ql.QuoteHandle(ql.SimpleQuote(libor_rate)), ql.Actual365Fixed())
+
+# Set up the interest rate swaps
+fixed_leg_tenor = ql.Period(1, ql.Years)
+floating_leg_tenor = ql.Period(3, ql.Months)
+swap_rate = 0.025
+swap_start = calendar.advance(today, 1, ql.Years)
+swap_end = calendar.advance(swap_start, 10, ql.Years)
+notional = 1000000
+
+fixed_schedule = ql.Schedule(swap_start, swap_end, fixed_leg_tenor, calendar, ql.ModifiedFollowing, ql.ModifiedFollowing, ql.DateGeneration.Forward, False)
+floating_schedule = ql.Schedule(swap_start, swap_end, floating_leg_tenor, calendar, ql.ModifiedFollowing, ql.ModifiedFollowing, ql.DateGeneration.Forward, False)
+
+index = ql.USDLibor(ql.Period(3, ql.Months), ql.YieldTermStructureHandle(libor_curve))
+swap = ql.VanillaSwap(ql.VanillaSwap.Payer, notional, fixed_schedule, swap_rate, ql.Actual365Fixed(), floating_schedule, index, 0, index.dayCounter())
+
+# Set up the pricing engine
+discount_curve = ql.YieldTermStructureHandle(risk_free_curve)
+engine = ql.DiscountingSwapEngine(discount_curve)
+swap.setPricingEngine(engine)
+
+# Calculate the present value of the swap
+pv = swap.NPV()
+fair_rate = swap.fairRate()
+
+print(f"The present value of the swap is: {pv:.2f}")
+print(f"The fair rate of the swap is: {fair_rate:.4f}")
+
+# Calculate the duration and convexity
+fixed_leg_cf = [cf.amount() for cf in swap.leg(0)]
+fixed_leg_dates = [cf.date() for cf in swap.leg(0)]
+duration = 0
+convexity = 0
+
+for cf, date in zip(fixed_leg_cf, fixed_leg_dates):
+    t = (date - today) / 365.0
+    discount_factor = discount_curve.discount(t)
+    duration += cf * t * discount_factor
+    convexity += cf * t * t * discount_factor
+
+duration /= notional * swap_rate
+convexity /= notional * swap_rate
+
+print(f"The duration of the swap is: {duration:.4f}")
+print(f"The convexity of the swap is: {convexity:.4f}")
+
+# Plot fixed and floating leg cash flows
+fixed_leg_cashflows = [cf.amount() for cf in swap.leg(0)]
+floating_leg_cashflows = [cf.amount() for cf in swap.leg(1)]
+
+fixed_leg_dates = [ql_to_datetime(cf.date()) for cf in swap.leg(0)]
+floating_leg_dates = [ql_to_datetime(cf.date()) for cf in swap.leg(1)]
+
+cashflows = list(zip(fixed_leg_dates, fixed_leg_cashflows, ['Fixed'] * len(fixed_leg_cashflows))) + \
+            list(zip(floating_leg_dates, floating_leg_cashflows, ['Floating'] * len(floating_leg_cashflows)))
+
+cashflow_dates, cashflow_amounts, cashflow_types = zip(*sorted(cashflows, key=lambda x: x[0]))
+
+plt.figure(figsize=(10, 5))
+plt.bar(cashflow_dates, cashflow_amounts, width=100, alpha=0.7, label='Fixed Leg', color=np.where(np.array(cashflow_types)=='Fixed', 'b', 'g'))
+plt.xlabel('Cashflow Dates')
+plt.ylabel('Cashflow Amounts')
+plt.title('Interest Rate Swap Cashflows')
+
+fixed_patch = plt.Rectangle((0, 0), 1, 1, color='b', alpha=0.7)
+floating_patch = plt.Rectangle((0, 0), 1, 1, color='g', alpha=0.7)
+plt.legend([fixed_patch, floating_patch], ['Fixed Leg', 'Floating Leg'])
+
+plt.show()
+def datetime_to_ql(date):
+    return ql.Date(date.day, date.month, date.year)
+
+# Plot yield curves
+dates = [ql_to_datetime(today + ql.Period(i, ql.Months)) for i in range(0, 12 * 11, 3)]
+ql_dates = [datetime_to_ql(d) for d in dates]
+risk_free_rates = [risk_free_curve.zeroRate(d, ql.Actual365Fixed(), ql.Continuous).rate() for d in ql_dates]
+libor_rates = [libor_curve.zeroRate(d, ql.Actual365Fixed(), ql.Continuous).rate() for d in ql_dates]
+
+plt.figure(figsize=(10, 5))
+plt.plot(dates, risk_free_rates, label='Risk-Free Curve')
+plt.plot(dates, libor_rates, label='LIBOR Curve')
+plt.xlabel('Maturity')
+plt.ylabel('Zero Rate')
+plt.title('Yield Curves')
+plt.legend()
+plt.show()
